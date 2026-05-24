@@ -1434,67 +1434,57 @@ struct GlobalKeyMonitor: NSViewRepresentable {
                     } else {
                         onUp()
                     }
-                    return nil // Consume event
+                    return nil
                 case 125: // Down
                     if event.modifierFlags.contains(.shift) {
                         onExtendDown()
                     } else {
                         onDown()
                     }
-                    return nil // Consume event
-                case 36: // Enter
-                    onEnter()
                     return nil
                 case 53: // Escape
                     onEscape()
                     return nil
-                case 51: // Delete/Backspace
-                    if event.modifierFlags.contains(.command) {
-                        onDelete()
-                        return nil
+                case 51: // Delete/Backspace without Cmd -> backspace in search
+                    if !event.modifierFlags.contains(.command) {
+                        if onBackspace() { return nil }
+                        return event
                     }
-                    if onBackspace() { return nil }
-                    return event
-                case 8: // C (for Copy)
-                    if event.modifierFlags.contains(.command) {
-                        // If text is selected in a text view, let the system handle native copy
-                        if let responder = view.window?.firstResponder, responder is NSTextView {
-                            return event
-                        }
-                        onCopy()
-                        return nil
-                    }
-                    return event
-                case 35: // Cmd+P (P is 35)
-                    if event.modifierFlags.contains(.command) {
-                        onPin()
-                        return nil
-                    }
-                    return event
-                case 11: // Cmd+B (B is 11)
-                    if event.modifierFlags.contains(.command) {
-                        onBookmark()
-                        return nil
-                    }
-                    return event
-                case 1: // Cmd+S (S is 1)
-                    if event.modifierFlags.contains(.command) {
-                        onSaveImage()
-                        return nil
-                    }
-                    return event
-                case 17: // Cmd+T (T is 17)
-                    if event.modifierFlags.contains(.command) {
-                        onAddTag()
-                        return nil
-                    }
-                    return event
+                    break // fall through to shortcut matching
                 case 48: // Tab
                     onTabComplete()
                     return nil
                 default:
-                    return event
+                    break
                 }
+
+                let settings = SettingsManager.shared
+                func matches(_ action: ShortcutAction) -> Bool {
+                    let sc = settings.shortcut(for: action)
+                    guard event.keyCode == sc.keyCode else { return false }
+                    let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    var expected = NSEvent.ModifierFlags()
+                    if sc.modifiers.command { expected.insert(.command) }
+                    if sc.modifiers.shift { expected.insert(.shift) }
+                    if sc.modifiers.option { expected.insert(.option) }
+                    if sc.modifiers.control { expected.insert(.control) }
+                    return mods.subtracting([.capsLock, .numericPad, .function]) == expected
+                }
+
+                if matches(.paste) { onEnter(); return nil }
+                if matches(.copy) {
+                    if let responder = view.window?.firstResponder, responder is NSTextView {
+                        return event
+                    }
+                    onCopy(); return nil
+                }
+                if matches(.delete) { onDelete(); return nil }
+                if matches(.pin) { onPin(); return nil }
+                if matches(.bookmark) { onBookmark(); return nil }
+                if matches(.saveImage) { onSaveImage(); return nil }
+                if matches(.addTag) { onAddTag(); return nil }
+
+                return event
             }
             
             // Store monitor to remove later? 

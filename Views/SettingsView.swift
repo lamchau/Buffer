@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var recordedModifiers = HotkeyModifiers()
     @State private var showingTrimAlert = false
     @State private var pendingTier: HistoryLimit?
+    @State private var recordingAction: ShortcutAction?
     
     var body: some View {
         VStack(spacing: 20) {
@@ -162,6 +163,36 @@ struct SettingsView: View {
             
             Divider()
 
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Window Shortcuts")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Reset to Defaults") {
+                        settings.resetShortcuts()
+                    }
+                    .font(.system(size: 10))
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.secondary)
+                }
+
+                VStack(spacing: 4) {
+                    ForEach(ShortcutAction.allCases, id: \.self) { action in
+                        ShortcutRow(
+                            action: action,
+                            shortcut: settings.shortcutBinding(for: action),
+                            isRecording: Binding(
+                                get: { recordingAction == action },
+                                set: { if $0 { recordingAction = action } else { recordingAction = nil } }
+                            )
+                        )
+                    }
+                }
+            }
+
+            Divider()
+
             // About
             VStack(spacing: 6) {
                 Text("Designed to disappear. Built to remember.")
@@ -201,11 +232,20 @@ struct SettingsView: View {
         } message: {
             Text("This will permanently delete your oldest unbookmarked items to fit the new size. This action cannot be undone.")
         }
-        .background(KeyRecorder(isRecording: $isRecording) { keyCode, modifiers in
-            settings.hotkeyKeyCode = keyCode
-            settings.hotkeyModifiers = modifiers
-            settings.save()
-            isRecording = false
+        .background(KeyRecorder(isRecording: Binding(
+            get: { isRecording || recordingAction != nil },
+            set: { if !$0 { isRecording = false; recordingAction = nil } }
+        )) { keyCode, modifiers in
+            if isRecording {
+                settings.hotkeyKeyCode = keyCode
+                settings.hotkeyModifiers = modifiers
+                settings.save()
+                isRecording = false
+            } else if let action = recordingAction {
+                settings.shortcuts[action] = KeyboardShortcut(keyCode: keyCode, modifiers: modifiers)
+                settings.save()
+                recordingAction = nil
+            }
         })
     }
     
@@ -221,6 +261,44 @@ struct SettingsView: View {
                 .padding(.vertical, 6)
         }
         .buttonStyle(.bordered)
+    }
+}
+
+struct ShortcutRow: View {
+    let action: ShortcutAction
+    @Binding var shortcut: KeyboardShortcut
+    @Binding var isRecording: Bool
+
+    var body: some View {
+        HStack {
+            Text(action.displayName)
+                .font(.system(size: 12))
+                .frame(width: 130, alignment: .leading)
+
+            Spacer()
+
+            HStack(spacing: 4) {
+                Text(shortcut.displayString)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(isRecording ? Color.accentColor.opacity(0.2) : Color(NSColor.controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(isRecording ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 1)
+            )
+
+            Button(isRecording ? "Cancel" : "Set") {
+                isRecording.toggle()
+            }
+            .font(.system(size: 10))
+            .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -284,8 +362,9 @@ class KeyRecorderView: NSView {
             control: event.modifierFlags.contains(.control)
         )
         
-        // Require at least one modifier
-        if mods.shift || mods.command || mods.option || mods.control {
+        let specialKeys: Set<UInt16> = [36, 51, 53, 48]
+        let hasModifier = mods.shift || mods.command || mods.option || mods.control
+        if hasModifier || specialKeys.contains(event.keyCode) {
             onRecord?(event.keyCode, mods)
         }
     }
@@ -297,6 +376,7 @@ class SettingsViewModel: ObservableObject {
     @Published var hotkeyKeyCode: UInt16
     @Published var launchAtLogin: Bool
     @Published var historyLimit: HistoryLimit
+    @Published var shortcuts: [ShortcutAction: KeyboardShortcut] = [:]
     
     private let defaults = UserDefaults.standard
     private let hotkeyModifiersKey = "hotkeyModifiers"
@@ -320,13 +400,25 @@ class SettingsViewModel: ObservableObject {
         // Load history limit
         let rawLimit = defaults.integer(forKey: "historyLimit")
         self.historyLimit = HistoryLimit(rawValue: rawLimit) ?? .essential
+
+        if let data = defaults.data(forKey: "keyboardShortcuts"),
+           let saved = try? JSONDecoder().decode([ShortcutAction: KeyboardShortcut].self, from: data) {
+            self.shortcuts = saved
+        } else {
+            self.shortcuts = SettingsManager.defaultShortcuts
+        }
     }
     
     func save() {
         defaults.set(hotkeyModifiers.toArray(), forKey: hotkeyModifiersKey)
         defaults.set(Int(hotkeyKeyCode), forKey: hotkeyKeyCodeKey)
         defaults.set(historyLimit.rawValue, forKey: "historyLimit")
-        
+
+        if let data = try? JSONEncoder().encode(shortcuts) {
+            defaults.set(data, forKey: "keyboardShortcuts")
+        }
+        SettingsManager.shared.shortcuts = shortcuts
+
         SettingsManager.shared.hotkeyModifiers = hotkeyModifiers
         SettingsManager.shared.hotkeyKeyCode = hotkeyKeyCode
         SettingsManager.shared.historyLimit = historyLimit
@@ -334,5 +426,17 @@ class SettingsViewModel: ObservableObject {
         
         NotificationCenter.default.post(name: .bufferHotkeyChanged, object: nil)
         NotificationCenter.default.post(name: .bufferHistoryLimitChanged, object: nil)
+    }
+
+    func shortcutBinding(for action: ShortcutAction) -> Binding<KeyboardShortcut> {
+        Binding(
+            get: { self.shortcuts[action] ?? KeyboardShortcut(keyCode: action.defaultKeyCode, modifiers: action.defaultModifiers) },
+            set: { self.shortcuts[action] = $0; self.save() }
+        )
+    }
+
+    func resetShortcuts() {
+        shortcuts = SettingsManager.defaultShortcuts
+        save()
     }
 }

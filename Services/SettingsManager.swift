@@ -34,11 +34,21 @@ class SettingsManager: ObservableObject {
     // Keys
     private let hotkeyModifiersKey = "hotkeyModifiers"
     private let hotkeyKeyCodeKey = "hotkeyKeyCode"
-    
+    private let shortcutsKey = "keyboardShortcuts"
+
     @Published var hotkeyModifiers: HotkeyModifiers
     @Published var hotkeyKeyCode: UInt16
     @Published var launchAtLogin: Bool = false
     @Published var historyLimit: HistoryLimit = .essential
+    @Published var shortcuts: [ShortcutAction: KeyboardShortcut] = [:]
+
+    static var defaultShortcuts: [ShortcutAction: KeyboardShortcut] {
+        var result: [ShortcutAction: KeyboardShortcut] = [:]
+        for action in ShortcutAction.allCases {
+            result[action] = KeyboardShortcut(keyCode: action.defaultKeyCode, modifiers: action.defaultModifiers)
+        }
+        return result
+    }
     
     private init() {
         // Initialize with defaults first, then load saved values
@@ -64,12 +74,26 @@ class SettingsManager: ObservableObject {
         // Load history limit
         let rawLimit = defaults.integer(forKey: "historyLimit")
         self.historyLimit = HistoryLimit(rawValue: rawLimit) ?? .essential
+
+        if let data = defaults.data(forKey: shortcutsKey),
+           let saved = try? JSONDecoder().decode([ShortcutAction: KeyboardShortcut].self, from: data) {
+            self.shortcuts = saved
+        } else {
+            self.shortcuts = Self.defaultShortcuts
+        }
     }
     
     func save() {
         defaults.set(hotkeyModifiers.toArray(), forKey: hotkeyModifiersKey)
         defaults.set(Int(hotkeyKeyCode), forKey: hotkeyKeyCodeKey)
         defaults.set(historyLimit.rawValue, forKey: "historyLimit")
+        if let data = try? JSONEncoder().encode(shortcuts) {
+            defaults.set(data, forKey: shortcutsKey)
+        }
+    }
+
+    func shortcut(for action: ShortcutAction) -> KeyboardShortcut {
+        return shortcuts[action] ?? KeyboardShortcut(keyCode: action.defaultKeyCode, modifiers: action.defaultModifiers)
     }
     
     func toggleLaunchAtLogin(_ enabled: Bool) {
@@ -98,14 +122,14 @@ struct HotkeyModifiers: Equatable {
     var command: Bool
     var option: Bool
     var control: Bool
-    
+
     init(shift: Bool = false, command: Bool = false, option: Bool = false, control: Bool = false) {
         self.shift = shift
         self.command = command
         self.option = option
         self.control = control
     }
-    
+
     init(from array: [String]) {
         self.shift = array.contains("shift")
         self.command = array.contains("command")
@@ -129,6 +153,20 @@ struct HotkeyModifiers: Equatable {
         if shift { parts.append("⇧") }
         if command { parts.append("⌘") }
         return parts.joined()
+    }
+}
+
+
+extension HotkeyModifiers: Codable {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let array = try container.decode([String].self)
+        self.init(from: array)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(toArray())
     }
 }
 
