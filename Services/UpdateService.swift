@@ -331,10 +331,28 @@ class UpdateService {
                 return fail("Failed to run codesign: \(error)")
             }
 
+            let currentTeamID = Self.signingTeamID(for: Bundle.main.bundleURL)
+            let newTeamID = Self.signingTeamID(for: newAppURL)
+
+            if let current = currentTeamID, let incoming = newTeamID {
+                guard current == incoming else {
+                    return fail("Team ID mismatch: expected \(current), got \(incoming)")
+                }
+                print("[UpdateService] Team ID match: \(current)")
+            } else {
+                #if DEBUG
+                print("[UpdateService] Warning: could not verify team ID match (debug build)")
+                #else
+                return fail("Could not verify signing team ID — rejecting update")
+                #endif
+            }
+
             // 5. Write install script — extraction already done, script only copies + opens
             let script = """
             #!/bin/bash
             sleep 2
+            SOURCE_APP='\(newAppURL.path)'
+            TEMP_DIR='\(tmpBase.path)'
 
             rm -rf "/Applications/Buffer.app"
             if [ $? -ne 0 ]; then
@@ -342,13 +360,14 @@ class UpdateService {
                 exit 1
             fi
 
-            cp -R "\(newAppURL.path)" "/Applications/Buffer.app"
+            cp -R "$SOURCE_APP" "/Applications/Buffer.app"
             if [ $? -ne 0 ]; then
                 osascript -e 'display alert "Buffer Update Failed" message "Could not copy new app. Try updating manually."'
                 exit 1
             fi
 
             xattr -cr "/Applications/Buffer.app"
+            rm -rf "$TEMP_DIR"
             sleep 1
             /bin/launchctl asuser $(id -u) /usr/bin/open "/Applications/Buffer.app"
             """
@@ -466,5 +485,25 @@ class UpdateService {
             self.progressWindow = nil
             print("[UpdateService] Progress window hidden")
         }
+    }
+
+    private static func signingTeamID(for appURL: URL) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["-dv", appURL.path]
+        let pipe = Pipe()
+        process.standardError = pipe
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let output = String(decoding: data, as: UTF8.self)
+            for line in output.components(separatedBy: "\n") {
+                if line.hasPrefix("TeamIdentifier=") {
+                    return String(line.dropFirst("TeamIdentifier=".count))
+                }
+            }
+        } catch { print("[UpdateService] Failed to read team ID: \(error)") }
+        return nil
     }
 }
