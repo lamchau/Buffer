@@ -159,7 +159,46 @@ struct SettingsView: View {
                     }
                 }
             }
-            
+
+            Divider()
+                .padding(.vertical, 4)
+
+            Text("Sensitive Item Expiry")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.secondary)
+
+            Text("How long to keep passwords and other concealed clipboard items before auto-deleting.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary.opacity(0.6))
+                .padding(.bottom, 4)
+
+            HStack(spacing: 6) {
+                ForEach(SensitiveExpiry.allCases, id: \.self) { expiry in
+                    Button(action: {
+                        settings.sensitiveExpiry = expiry
+                        settings.save()
+                    }) {
+                        Text(expiry.label)
+                            .font(.system(size: 11, weight: settings.sensitiveExpiry == expiry ? .semibold : .regular, design: .monospaced))
+                            .foregroundColor(settings.sensitiveExpiry == expiry ? .primary : .secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(settings.sensitiveExpiry == expiry
+                                          ? Color.accentColor.opacity(0.1)
+                                          : Color(NSColor.controlBackgroundColor))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(settings.sensitiveExpiry == expiry
+                                            ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
             Divider()
 
             // About
@@ -297,6 +336,7 @@ class SettingsViewModel: ObservableObject {
     @Published var hotkeyKeyCode: UInt16
     @Published var launchAtLogin: Bool
     @Published var historyLimit: HistoryLimit
+    @Published var sensitiveExpiry: SensitiveExpiry
     
     private let defaults = UserDefaults.standard
     private let hotkeyModifiersKey = "hotkeyModifiers"
@@ -320,16 +360,21 @@ class SettingsViewModel: ObservableObject {
         // Load history limit
         let rawLimit = defaults.integer(forKey: "historyLimit")
         self.historyLimit = HistoryLimit(rawValue: rawLimit) ?? .essential
+
+        let rawExpiry = defaults.integer(forKey: "sensitiveExpiry")
+        self.sensitiveExpiry = SensitiveExpiry(rawValue: rawExpiry) ?? .thirtySeconds
     }
     
     func save() {
         defaults.set(hotkeyModifiers.toArray(), forKey: hotkeyModifiersKey)
         defaults.set(Int(hotkeyKeyCode), forKey: hotkeyKeyCodeKey)
         defaults.set(historyLimit.rawValue, forKey: "historyLimit")
-        
+        defaults.set(sensitiveExpiry.rawValue, forKey: "sensitiveExpiry")
+
         SettingsManager.shared.hotkeyModifiers = hotkeyModifiers
         SettingsManager.shared.hotkeyKeyCode = hotkeyKeyCode
         SettingsManager.shared.historyLimit = historyLimit
+        SettingsManager.shared.sensitiveExpiry = sensitiveExpiry
         SettingsManager.shared.save()
         
         NotificationCenter.default.post(name: .bufferHotkeyChanged, object: nil)

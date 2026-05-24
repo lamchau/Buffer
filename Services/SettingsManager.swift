@@ -25,6 +25,28 @@ enum HistoryLimit: Int, CaseIterable, Codable {
     }
 }
 
+enum SensitiveExpiry: Int, CaseIterable, Codable {
+    case thirtySeconds = 30
+    case oneMinute     = 60
+    case twoMinutes    = 120
+    case fiveMinutes   = 300
+    case fifteenMinutes = 900
+
+    var label: String {
+        switch self {
+        case .thirtySeconds: return "30s"
+        case .oneMinute: return "1m"
+        case .twoMinutes: return "2m"
+        case .fiveMinutes: return "5m"
+        case .fifteenMinutes: return "15m"
+        }
+    }
+
+    var timeInterval: TimeInterval {
+        return TimeInterval(rawValue)
+    }
+}
+
 /// Manages user preferences for Buffer
 class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
@@ -39,7 +61,8 @@ class SettingsManager: ObservableObject {
     @Published var hotkeyKeyCode: UInt16
     @Published var launchAtLogin: Bool = false
     @Published var historyLimit: HistoryLimit = .essential
-    
+    @Published var sensitiveExpiry: SensitiveExpiry = .thirtySeconds
+
     private init() {
         // Initialize with defaults first, then load saved values
         let defaultMods = HotkeyModifiers(shift: true, command: true, option: false, control: false)
@@ -64,12 +87,16 @@ class SettingsManager: ObservableObject {
         // Load history limit
         let rawLimit = defaults.integer(forKey: "historyLimit")
         self.historyLimit = HistoryLimit(rawValue: rawLimit) ?? .essential
+
+        let rawExpiry = defaults.integer(forKey: "sensitiveExpiry")
+        self.sensitiveExpiry = SensitiveExpiry(rawValue: rawExpiry) ?? .thirtySeconds
     }
     
     func save() {
         defaults.set(hotkeyModifiers.toArray(), forKey: hotkeyModifiersKey)
         defaults.set(Int(hotkeyKeyCode), forKey: hotkeyKeyCodeKey)
         defaults.set(historyLimit.rawValue, forKey: "historyLimit")
+        defaults.set(sensitiveExpiry.rawValue, forKey: "sensitiveExpiry")
     }
     
     func toggleLaunchAtLogin(_ enabled: Bool) {

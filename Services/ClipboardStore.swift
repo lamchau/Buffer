@@ -97,11 +97,20 @@ class ClipboardStore: ObservableObject {
     func delete(_ item: ClipboardItem) {
         items.removeAll { $0.id == item.id }
         deleteAssociatedFiles(for: item)
-        
+
         let itemsToSave = items
         saveQueue.async { [weak self] in
             self?.saveHistoryToDisk(itemsToSave)
         }
+    }
+
+    func deleteSensitiveItem(id: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == id && $0.isSensitive }) else { return }
+        let item = items[index]
+        deleteAssociatedFiles(for: item)
+        items.remove(at: index)
+        let itemsToSave = items
+        saveQueue.async { [weak self] in self?.saveHistoryToDisk(itemsToSave) }
     }
     
     /// Toggle pin state for an item
@@ -314,8 +323,26 @@ class ClipboardStore: ObservableObject {
         do {
             let data = try Data(contentsOf: historyFileURL)
             let loadedItems = try JSONDecoder().decode([ClipboardItem].self, from: data)
-            self.items = loadedItems
-            print("[Buffer] Loaded \(loadedItems.count) items from history")
+
+            let now = Date()
+            let (expired, valid) = loadedItems.reduce(into: ([ClipboardItem](), [ClipboardItem]())) { result, item in
+                if item.isSensitive, let expiry = item.expiresAt, expiry <= now {
+                    result.0.append(item)
+                } else {
+                    result.1.append(item)
+                }
+            }
+            for item in expired {
+                deleteAssociatedFiles(for: item)
+            }
+            if !expired.isEmpty {
+                self.items = valid
+                saveQueue.async { [weak self] in self?.saveHistoryToDisk(valid) }
+                print("[Buffer] Loaded \(valid.count) items from history (removed \(expired.count) expired sensitive items)")
+            } else {
+                self.items = loadedItems
+                print("[Buffer] Loaded \(loadedItems.count) items from history")
+            }
         } catch {
             print("[Buffer] Failed to load history: \(error)")
         }

@@ -80,6 +80,13 @@ class ClipboardWatcher: ObservableObject {
             return
         }
         
+        let concealedTypes: [NSPasteboard.PasteboardType] = [
+            NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"),
+            NSPasteboard.PasteboardType("com.agilebits.onepassword"),
+            NSPasteboard.PasteboardType("com.apple.is-transient"),
+        ]
+        let isSensitive = concealedTypes.contains(where: { pasteboard.types?.contains($0) == true })
+
         // Get current frontmost app as source
         let sourceApp = NSWorkspace.shared.frontmostApplication?.localizedName
         
@@ -111,14 +118,28 @@ class ClipboardWatcher: ObservableObject {
                 
                 if textSize <= inlineTextLimit {
                     // Small text: store inline (current behavior)
-                    let item = ClipboardItem.text(text, sourceApp: sourceApp)
+                    var item = ClipboardItem.text(text, sourceApp: sourceApp)
+                    if isSensitive {
+                        item.isSensitive = true
+                        item.expiresAt = Date().addingTimeInterval(SettingsManager.shared.sensitiveExpiry.timeInterval)
+                    }
                     store.add(item)
+                    if isSensitive {
+                        scheduleSensitiveDeletion(id: item.id)
+                    }
                 } else {
                     // Large text: save to file, store preview inline
                     let preview = String(text.prefix(previewLength))
                     if let filename = store.saveText(text) {
-                        let item = ClipboardItem.largeText(preview: preview, filename: filename, sourceApp: sourceApp)
+                        var item = ClipboardItem.largeText(preview: preview, filename: filename, sourceApp: sourceApp)
+                        if isSensitive {
+                            item.isSensitive = true
+                            item.expiresAt = Date().addingTimeInterval(SettingsManager.shared.sensitiveExpiry.timeInterval)
+                        }
                         store.add(item)
+                        if isSensitive {
+                            scheduleSensitiveDeletion(id: item.id)
+                        }
                         print("[Buffer] Large text (\(textSize / 1024) KB) saved to file: \(filename)")
                     }
                 }
@@ -136,8 +157,15 @@ class ClipboardWatcher: ObservableObject {
                 
                 // Save image to disk
                 if let filename = store.saveImage(imageData) {
-                    let item = ClipboardItem.image(filename: filename, sourceApp: sourceApp)
+                    var item = ClipboardItem.image(filename: filename, sourceApp: sourceApp)
+                    if isSensitive {
+                        item.isSensitive = true
+                        item.expiresAt = Date().addingTimeInterval(SettingsManager.shared.sensitiveExpiry.timeInterval)
+                    }
                     store.add(item)
+                    if isSensitive {
+                        scheduleSensitiveDeletion(id: item.id)
+                    }
                 }
             }
         }
@@ -161,6 +189,12 @@ class ClipboardWatcher: ObservableObject {
         return nil
     }
     
+    private func scheduleSensitiveDeletion(id: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + SettingsManager.shared.sensitiveExpiry.timeInterval) { [weak self] in
+            self?.store.deleteSensitiveItem(id: id)
+        }
+    }
+
     /// Check if a file path points to an image by examining its UTType
     private func isImageFile(_ filePath: String) -> Bool {
         let fileExtension = (filePath as NSString).pathExtension.lowercased()
